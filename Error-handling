@@ -1,0 +1,116 @@
+
+/////////////// exception class ////////////
+class ApiException implements Exception {
+  final String message;
+   final int? statusCode;
+    ApiException(this.message,{this.statusCode});
+    @override
+  String toString()=>message;
+
+}
+/////////// Boiler Plate to wrap code in try and catch bloc /////////////
+Future<T> apiGuard<T>(Future<T> Function() apiCall) async {
+  final Logger logger = Logger();
+  try {
+    return await apiCall(); // execute that funtion
+  } catch (e, st) {
+    logger.e("Dio Error Response: ${e.toString()}, stacktrace: $st");
+    ///handle all  type of error in Api Handler and throw a user friendly error
+    throw ApiErrorHandler.handle(e, st);
+  }
+}
+
+//////////////ALl Error Handler and Throw a Commont APiException class object //////////////
+
+class ApiErrorHandler {
+  static ApiException handle(dynamic error, StackTrace stackTrace) {
+    /// first log this error in firebase
+    FirebaseCrashlytics.instance.recordError(
+      error,
+      stackTrace,
+      reason: 'Api Error',
+      fatal: false,
+    );
+
+    /// dio handle dio error,
+    if (error is DioException) {
+      /// if timeout error
+      if (error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.sendTimeout) {
+        return ApiException("Connection timeout. Please try again.");
+      }
+      if (error.error is SocketException) {
+        return ApiException("No Internet Connection");
+      }
+
+      /// handle all status code
+      if (error.type == DioExceptionType.badResponse) {
+        final statusCode = error.response?.statusCode;
+        switch (statusCode) {
+          case 400:
+            return ApiException(
+              error.response?.data?["message"] ?? "Bad request",
+            );
+
+          case 401:
+            return ApiException("Unauthorized. Please login again.");
+
+          case 403:
+            return ApiException("Forbidden request");
+
+          case 404:
+            return ApiException("Resource not found");
+
+          case 500:
+            return ApiException("Internal server error");
+
+          default:
+            return ApiException(
+              error.response?.data?["message"] ?? "Something went wrong",
+            );
+        }
+      }
+
+      /// unknown / fallback
+      return ApiException("Unexpected error occurred");
+    }
+
+    /// all Custom(which i will create and throw exception with and without status code
+    if (error is ApiException) {
+      return error;
+    }
+    if (error is SocketException) {
+      return ApiException("No internet connection");
+    }
+
+    if (error is FormatException || error is TypeError) {
+      return ApiException("Data parsing error");
+    }
+
+    return ApiException("Something went wrong");
+  }
+}
+
+//////////////////////////How To handle the error in ui /////////////
+// where you call api 
+try {
+  await apiGuard(() => apiService.getData());
+} on ApiException catch (e) {
+  showError(e.message);
+} catch (e) {
+  showError("Something went wrong");
+}
+//// using riverpod
+ref.watch(dataProvider).when(
+  data: (data) => Text("Success"),
+  loading: () => CircularProgressIndicator(),
+  error: (error, stack) {
+    final message = error is ApiException
+        ? error.message
+        : "Something went wrong";
+
+    return Text(message);
+  },
+);
+
